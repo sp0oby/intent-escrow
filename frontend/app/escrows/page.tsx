@@ -9,6 +9,7 @@ import {
 } from "@/lib/contract";
 import type { EscrowWithId } from "@/lib/types";
 import { EscrowCard } from "@/components/EscrowCard";
+import { AddressTag } from "@/components/AddressTag";
 
 export default function EscrowsPage() {
   const client = usePublicClient();
@@ -65,12 +66,16 @@ export default function EscrowsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h2 className="text-2xl font-semibold">Escrows</h2>
           <p className="text-muted text-sm">
             All escrows ever created on this deployment.
           </p>
+          <div className="text-xs text-muted mt-2">
+            Contract:{" "}
+            <AddressTag address={INTENT_ESCROW_ADDRESS} truncate={false} />
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-2 text-sm text-muted">

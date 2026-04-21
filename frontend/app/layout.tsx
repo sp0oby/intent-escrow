@@ -4,10 +4,26 @@ import "./globals.css";
 import { Providers } from "./providers";
 import { ConnectButton } from "@/components/ConnectButton";
 
+const DESCRIPTION =
+  "Minimal intent-based escrow with EIP-712 signature verification. ETH and ERC-20, ERC-1271 smart-wallet beneficiaries, gasless accept-and-release intents. Sepolia testnet.";
+
 export const metadata: Metadata = {
-  title: "Intent Escrow",
-  description:
-    "Minimal intent-based escrow with EIP-712 signature verification. ETH and ERC-20 support, gasless accept-and-release intents.",
+  title: {
+    default: "Intent Escrow",
+    template: "%s · Intent Escrow",
+  },
+  description: DESCRIPTION,
+  applicationName: "Intent Escrow",
+  openGraph: {
+    title: "Intent Escrow",
+    description: DESCRIPTION,
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: "Intent Escrow",
+    description: DESCRIPTION,
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -12,6 +12,7 @@ import {
   INTENT_ESCROW_ADDRESS,
   TARGET_CHAIN,
 } from "@/lib/contract";
+import { parseContractError } from "@/lib/errors";
 
 type Parsed = {
   escrowId: bigint;
@@ -99,7 +100,9 @@ export function SettleIntentCard({ escrowId }: { escrowId: bigint }) {
         <div className="text-sm text-accent">Settled. Tx mined.</div>
       )}
       {error && (
-        <div className="text-sm text-red-400 break-all">{error.message}</div>
+        <div className="text-sm text-red-400 break-words">
+          {parseContractError(error)}
+        </div>
       )}
     </div>
   );

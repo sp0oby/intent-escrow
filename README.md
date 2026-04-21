@@ -9,9 +9,10 @@
 Account abstraction and the "intents" model are the two biggest shifts in Ethereum UX. This project is a small, self-contained example of both ideas working together:
 
 - The counterparty (beneficiary) **never submits a transaction**. They sign a typed `SettleIntent` off-chain; anyone — the depositor, a relayer, a solver network — can submit it.
+- **Smart-wallet beneficiaries work out of the box.** Signature verification uses OpenZeppelin's `SignatureChecker`, which dispatches to ECDSA for EOAs and to **ERC-1271 `isValidSignature`** for contract wallets. That means a Safe, an ERC-4337 account, or an EIP-7702 delegated EOA can all be beneficiaries with zero contract changes — this is what actually makes the design account-abstraction-compatible, not just AA-adjacent.
 - Signatures are bound to **domain + chainId + contract + per-escrow nonce + deadline**, so the same replay-safety tricks used by Uniswap `permit`, 0x, Seaport, and ERC-2612 work here verbatim.
 - Partial settlements let the depositor drip-release milestones against sequential signed intents — the foundation for things like streaming payroll, bounty payouts, and solver-backed marketplaces.
-- The contract is tiny (under ~300 lines excluding comments), auditable in one sitting, and demonstrates the non-negotiable patterns: Checks-Effects-Interactions, `nonReentrant`, `SafeERC20`, zero-address checks, no infinite approvals, owner-only surplus rescue that provably cannot touch user funds.
+- The contract is tiny (under ~300 lines excluding comments), auditable in one sitting, and demonstrates the non-negotiable patterns: Checks-Effects-Interactions, `nonReentrant`, `SafeERC20`, zero-address checks, no infinite approvals, **fee-on-transfer-token-safe accounting**, owner-only surplus rescue that provably cannot touch user funds.
 
 It is intentionally **not** a protocol — it's a portfolio-scale artifact that shows the exact toolchain, security patterns, and product thinking required to ship a real one.
 
@@ -21,7 +22,7 @@ It is intentionally **not** a protocol — it's a portfolio-scale artifact that 
 
 | Layer | Choice |
 |-------|--------|
-| Contracts | Solidity ^0.8.28, OpenZeppelin v5.1.0 (`ReentrancyGuard`, `EIP712`, `ECDSA`, `Ownable`, `SafeERC20`) |
+| Contracts | Solidity ^0.8.28, OpenZeppelin v5.1.0 (`ReentrancyGuard`, `EIP712`, `SignatureChecker`, `Ownable`, `SafeERC20`) |
 | Tooling | Foundry (`forge`, `cast`, `forge-std` v1.9.7, fuzz + invariant + gas snapshots) |
 | Network | Sepolia testnet |
 | Frontend | Next.js 15 (app router), React 19, wagmi v2, viem 2, TanStack Query, Tailwind |
@@ -64,16 +65,17 @@ The contract increments `nonce` atomically on every successful settle, so pre-si
 intent-escrow/
   contracts/            # Foundry project
     src/IntentEscrow.sol
-    test/IntentEscrow.t.sol            # 32 unit/signature/fuzz tests
+    test/IntentEscrow.t.sol            # 36 unit/signature/fuzz tests
     test/IntentEscrow.invariant.t.sol  # handler-based invariants
-    test/mocks/                        # MockERC20, Reenterer
+    test/mocks/                        # MockERC20, FeeOnTransferERC20,
+                                       #   MockERC1271Wallet, Reenterer
     script/Deploy.s.sol
     script/DeployMockToken.s.sol
     .gas-snapshot
   frontend/             # Next.js 15 app-router UI
     app/                # /, /create, /escrows, /escrow/[id]
-    components/         # Connect, Create, Card, Sign, Settle
-    lib/                # wagmi config, ABIs, typed-data helpers
+    components/         # Connect, Create, Card, Sign, Settle, AddressTag
+    lib/                # wagmi config, ABIs, typed-data helpers, error parser
   README.md
 ```
 
@@ -96,14 +98,14 @@ cd contracts
 forge install foundry-rs/forge-std@v1.9.7 OpenZeppelin/openzeppelin-contracts@v5.1.0 --no-commit
 
 forge build
-forge test -vv          # 35 tests, ~0.7s
+forge test -vv          # 39 tests, ~0.7s
 forge snapshot          # regenerates .gas-snapshot
 ```
 
 Expected output:
 
 ```
-Ran 2 test suites: 35 tests passed, 0 failed, 0 skipped (35 total tests)
+Ran 2 test suites: 39 tests passed, 0 failed, 0 skipped (39 total tests)
 ```
 
 ### 2. Frontend
@@ -154,12 +156,14 @@ Then paste the printed address into `frontend/.env.local` as `NEXT_PUBLIC_INTENT
 
 ## Key learnings demonstrated
 
-- **EIP-712 typed data done right**: `name + version + chainId + verifyingContract` domain, a per-struct nonce, and a deadline — the exact pattern used by ERC-2612 `permit` and production marketplaces. Verified against `ECDSA.tryRecover` (explicit non-zero recovered address check) with a negative test that swaps `chainId` mid-test.
-- **CEI + defense in depth**: every fund-moving function updates state before `call`/`safeTransfer`, and every fund-moving function also wears `nonReentrant` as a belt-and-braces guard. Proven by a malicious `Reenterer` mock in the test suite.
+- **EIP-712 typed data done right**: `name + version + chainId + verifyingContract` domain, a per-struct nonce, and a deadline — the exact pattern used by ERC-2612 `permit` and production marketplaces. Negative tests cover wrong chainId, replayed nonce, expired deadline, and wrong signer.
+- **Real account-abstraction support via ERC-1271**: verification uses `SignatureChecker.isValidSignatureNow`, so beneficiaries can be plain EOAs *or* any contract wallet (Safe, ERC-4337 smart account, EIP-7702 delegated EOA). Covered by a dedicated `MockERC1271Wallet` test including the reject-path.
+- **Fee-on-transfer / rebasing ERC-20 safety**: `createEscrow` measures the delta of `balanceOf(address(this))` before and after the pull, and stores that as `totalAmount`. The invariant `balance(token) >= totalLocked[token]` holds even for quirky tokens that burn on transfer — proven by a `FeeOnTransferERC20` mock with 5% burn.
+- **CEI + defense in depth**: every fund-moving function updates state before `call`/`safeTransfer`, and every fund-moving function also wears `nonReentrant` as a belt-and-braces guard. Proven by a malicious `Reenterer` mock.
 - **Owner-safe rescue pattern**: the owner can only withdraw the surplus above `totalLocked[token]`. Even a compromised owner cannot touch user escrows. The fee is hard-capped at `MAX_FEE_BPS = 100` (1%) as an additional immutable bound.
-- **Testing depth**: 31 unit/signature/fuzz tests + 3 invariants over 7,680 random call sequences each. Invariants assert `contract_balance(token) >= totalLocked[token]` and `released <= total` hold after every sequence.
-- **Real Foundry polish**: gas snapshot committed (`.gas-snapshot`), fuzz runs pinned in `foundry.toml`, custom errors instead of revert strings (cheaper + easier to test against), no warnings.
-- **Frontend UX that matches the contract**: three-button flow (switch chain → approve exact amount → execute), no infinite approvals, human-readable amounts via `formatUnits`/`parseUnits`, loaders on every async action, explicit chain guard before signing (wallet-side domain must match contract-side domain).
+- **Testing depth**: 36 unit/signature/fuzz tests + 3 invariants over 7,680 random call sequences each. Invariants assert `contract_balance(token) >= totalLocked[token]` and `released <= total` hold after every sequence.
+- **Real Foundry polish**: gas snapshot committed (`.gas-snapshot`), fuzz runs pinned in `foundry.toml`, custom errors instead of revert strings (cheaper + easier to test against).
+- **Frontend UX that matches the contract**: single primary CTA at a time (Connect → Switch network → Approve exact → Execute), a proper two-stage approval state machine (`approving` + `approveCooldown`) so the Create button can't re-enable during the confirm-to-cache-refresh gap, custom-error parsing from viem `BaseError`, copyable addresses with block-explorer deep links, no infinite approvals, human-readable amounts via `formatUnits` / `parseUnits`.
 
 ---
 
@@ -189,20 +193,24 @@ Full file: [`contracts/.gas-snapshot`](contracts/.gas-snapshot).
 
 ## Security checklist (applied)
 
-Sourced from [ethskills.com/security](https://ethskills.com/security/SKILL.md):
+Sourced from [ethskills.com/security](https://ethskills.com/security/SKILL.md) and [ethskills.com/audit](https://ethskills.com/audit/SKILL.md):
 
 - [x] Checks-Effects-Interactions in every fund-moving function
 - [x] `nonReentrant` on every fund-moving function
 - [x] `SafeERC20` for all token calls (USDT/non-standard safe)
+- [x] **Fee-on-transfer / rebasing token safe**: `createEscrow` records the actual received amount, not the caller-supplied amount
+- [x] **ERC-1271 smart-wallet safe**: signature verification via `SignatureChecker`, not bare `ECDSA.recover`
 - [x] Zero-address / zero-amount / expiry-in-future / expiry-too-far validation
 - [x] No infinite approvals (frontend approves exact amount)
-- [x] No spot-price oracle, no delegatecall, no selfdestruct
+- [x] No spot-price oracle, no delegatecall, no selfdestruct, no `Pausable` kill-switch (censorship-resistance / CROPS)
 - [x] EIP-712 with domain + per-escrow nonce + deadline — replay-safe across time/chain/contract
 - [x] Owner rescue bounded by `totalLocked` — cannot touch user funds
 - [x] Protocol fee immutable-bounded to 1% via `MAX_FEE_BPS`
 - [x] Custom errors + full negative test coverage
 - [x] Fuzz + invariant tests (7,680 calls per invariant, 0 reverts)
+- [x] Reentrancy-attack mock test covering the `_payout` path
 - [ ] Slither run (recommended before mainnet — `pipx install slither-analyzer && slither contracts`)
+- [ ] Full 20-skill audit pipeline (recommended before mainnet — see [evm-audit-skills](https://github.com/austintgriffith/evm-audit-skills))
 
 ---
 

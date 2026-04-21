@@ -4,10 +4,7 @@ import Link from "next/link";
 import { formatEther, formatUnits } from "viem";
 import { NATIVE_ETH } from "@/lib/contract";
 import { type EscrowWithId, statusOf } from "@/lib/types";
-
-function short(addr: string) {
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
-}
+import { AddressTag } from "@/components/AddressTag";
 
 export function EscrowCard({
   e,
@@ -51,14 +48,14 @@ export function EscrowCard({
       <div className="text-xs text-muted mt-1">
         {fmt(e.released)} released of {fmt(e.totalAmount)}
       </div>
-      <div className="mt-4 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted">
+      <div className="mt-4 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-muted">
         <div>Depositor</div>
-        <div className="font-mono text-right text-white">
-          {short(e.depositor)}
+        <div className="text-right text-white">
+          <AddressTag address={e.depositor} />
         </div>
         <div>Beneficiary</div>
-        <div className="font-mono text-right text-white">
-          {short(e.beneficiary)}
+        <div className="text-right text-white">
+          <AddressTag address={e.beneficiary} />
         </div>
         <div>Expiry</div>
         <div className="text-right text-white">

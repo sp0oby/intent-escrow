@@ -5,6 +5,8 @@ import {Test, console} from "forge-std/Test.sol";
 import {IntentEscrow} from "../src/IntentEscrow.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {Reenterer} from "./mocks/Reenterer.sol";
+import {FeeOnTransferERC20} from "./mocks/FeeOnTransferERC20.sol";
+import {MockERC1271Wallet} from "./mocks/MockERC1271Wallet.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /// @dev Unit + signature + fuzz tests. Fork/invariant tests live in the
@@ -488,6 +490,105 @@ contract IntentEscrowTest is Test {
         uint256 expectedPayout = amount - expectedFee;
         assertEq(beneficiary.balance, expectedPayout);
         assertEq(owner.balance, expectedFee);
+    }
+
+    // -----------------------------------------------------------------------
+    // ERC-1271 smart contract wallet beneficiaries
+    //
+    // The upgrade from `ECDSA.tryRecover` to `SignatureChecker` is the
+    // feature that actually makes this contract compatible with Safe /
+    // ERC-4337 / EIP-7702 smart accounts. These tests exercise both the
+    // accept-path and the reject-path of `isValidSignature`.
+    // -----------------------------------------------------------------------
+
+    function test_Settle_Erc1271Wallet_Succeeds() public {
+        MockERC1271Wallet wallet = new MockERC1271Wallet(vm.addr(BENEFICIARY_PK));
+
+        uint64 exp = uint64(block.timestamp + 1 days);
+        vm.prank(depositor);
+        uint256 id = escrow.createEscrow{value: 1 ether}(address(wallet), address(0), 1 ether, exp);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        // The mock wallet considers an EOA-signed digest valid if the signer
+        // matches its stored `owner`. This is what every real contract wallet
+        // ultimately reduces to.
+        bytes memory sig = _sign(BENEFICIARY_PK, id, 1 ether, deadline, 0);
+
+        escrow.settleWithSignature(id, 1 ether, deadline, sig);
+
+        assertEq(address(wallet).balance, 1 ether);
+        assertTrue(escrow.getEscrow(id).closed);
+    }
+
+    function test_RevertWhen_Settle_Erc1271_BadInnerSignature() public {
+        MockERC1271Wallet wallet = new MockERC1271Wallet(vm.addr(BENEFICIARY_PK));
+
+        uint64 exp = uint64(block.timestamp + 1 days);
+        vm.prank(depositor);
+        uint256 id = escrow.createEscrow{value: 1 ether}(address(wallet), address(0), 1 ether, exp);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        // Signed by an attacker, not by the wallet owner. The wallet's
+        // `isValidSignature` returns a non-magic value and the escrow reverts.
+        bytes memory sig = _sign(ATTACKER_PK, id, 1 ether, deadline, 0);
+
+        vm.expectRevert(IntentEscrow.InvalidSignature.selector);
+        escrow.settleWithSignature(id, 1 ether, deadline, sig);
+    }
+
+    // -----------------------------------------------------------------------
+    // Fee-on-transfer token accounting
+    //
+    // Asserts that the contract stores the amount actually received, not
+    // the caller-supplied amount, so the invariant
+    // `balance(token) >= totalLocked[token]` holds for quirky ERC-20s.
+    // -----------------------------------------------------------------------
+
+    function test_CreateEscrow_FeeOnTransfer_AccountsActualReceived() public {
+        FeeOnTransferERC20 fot = new FeeOnTransferERC20(500); // 5% burn
+        fot.mint(depositor, 1_000e18);
+
+        vm.prank(depositor);
+        fot.approve(address(escrow), 1_000e18);
+
+        uint64 exp = uint64(block.timestamp + 1 days);
+        vm.prank(depositor);
+        uint256 id = escrow.createEscrow(beneficiary, address(fot), 1_000e18, exp);
+
+        IntentEscrow.Escrow memory e = escrow.getEscrow(id);
+
+        // 5% was burned in transferFrom; 950 tokens actually arrived.
+        assertEq(e.totalAmount, 950e18, "totalAmount must equal received");
+        assertEq(escrow.totalLocked(address(fot)), 950e18, "locked must equal received");
+        assertEq(fot.balanceOf(address(escrow)), 950e18, "balance must equal received");
+        assertLe(escrow.totalLocked(address(fot)), fot.balanceOf(address(escrow)));
+    }
+
+    function test_Settle_FeeOnTransfer_ReleasesActualReceived() public {
+        FeeOnTransferERC20 fot = new FeeOnTransferERC20(500);
+        fot.mint(depositor, 1_000e18);
+
+        vm.prank(depositor);
+        fot.approve(address(escrow), 1_000e18);
+
+        uint64 exp = uint64(block.timestamp + 1 days);
+        vm.prank(depositor);
+        uint256 id = escrow.createEscrow(beneficiary, address(fot), 1_000e18, exp);
+
+        uint256 stored = escrow.getEscrow(id).totalAmount; // 950e18
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _sign(BENEFICIARY_PK, id, stored, deadline, 0);
+
+        escrow.settleWithSignature(id, stored, deadline, sig);
+
+        // The beneficiary's receive is itself subject to the 5% burn, so they
+        // get 95% of the 950 stored. The key property is that escrow
+        // accounting stayed sane end-to-end: escrow balance drains to zero
+        // and nothing is left locked.
+        assertEq(fot.balanceOf(beneficiary), (stored * 9_500) / 10_000);
+        assertEq(escrow.totalLocked(address(fot)), 0);
+        assertEq(fot.balanceOf(address(escrow)), 0);
+        assertTrue(escrow.getEscrow(id).closed);
     }
 
     function testFuzz_PartialSettlementsSumToTotal(uint96 a, uint96 b, uint96 c) public {

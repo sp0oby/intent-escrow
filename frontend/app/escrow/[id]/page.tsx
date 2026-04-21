@@ -16,7 +16,9 @@ import {
 } from "@/lib/contract";
 import { SignIntentCard } from "@/components/SignIntentCard";
 import { SettleIntentCard } from "@/components/SettleIntentCard";
+import { AddressTag } from "@/components/AddressTag";
 import { statusOf } from "@/lib/types";
+import { parseContractError } from "@/lib/errors";
 
 export default function EscrowDetailPage({
   params,
@@ -49,10 +51,20 @@ export default function EscrowDetailPage({
     query: { enabled: !!escrow && !isEth },
   });
 
-  const { writeContract: writeRefund, data: refundHash, isPending: refunding } = useWriteContract();
+  const {
+    writeContract: writeRefund,
+    data: refundHash,
+    isPending: refunding,
+    error: refundError,
+  } = useWriteContract();
   const refundReceipt = useWaitForTransactionReceipt({ hash: refundHash });
 
-  const { writeContract: writeCancel, data: cancelHash, isPending: cancelling } = useWriteContract();
+  const {
+    writeContract: writeCancel,
+    data: cancelHash,
+    isPending: cancelling,
+    error: cancelError,
+  } = useWriteContract();
   const cancelReceipt = useWaitForTransactionReceipt({ hash: cancelHash });
 
   if (isLoading || !escrow) {
@@ -94,9 +106,13 @@ export default function EscrowDetailPage({
       </div>
 
       <div className="card grid md:grid-cols-2 gap-x-6 gap-y-2 text-sm">
-        <Row k="Depositor" v={escrow.depositor} mono />
-        <Row k="Beneficiary" v={escrow.beneficiary} mono />
-        <Row k="Token" v={isEth ? "Native ETH" : escrow.token} mono />
+        <AddressRow k="Depositor" v={escrow.depositor} />
+        <AddressRow k="Beneficiary" v={escrow.beneficiary} />
+        {isEth ? (
+          <Row k="Token" v="Native ETH" mono />
+        ) : (
+          <AddressRow k="Token" v={escrow.token} />
+        )}
         <Row k="Total" v={`${fmt(escrow.totalAmount)} ${symStr}`} />
         <Row k="Released" v={`${fmt(escrow.released)} ${symStr}`} />
         <Row k="Remaining" v={`${fmt(escrow.totalAmount - escrow.released)} ${symStr}`} />
@@ -142,6 +158,11 @@ export default function EscrowDetailPage({
           {refundReceipt.isSuccess && (
             <div className="text-sm text-accent">Refunded.</div>
           )}
+          {refundError && (
+            <div className="text-sm text-red-400 break-words">
+              {parseContractError(refundError)}
+            </div>
+          )}
         </div>
       )}
 
@@ -165,6 +186,11 @@ export default function EscrowDetailPage({
           >
             {cancelling || cancelReceipt.isLoading ? "Submitting…" : "Cancel"}
           </button>
+          {cancelError && (
+            <div className="text-sm text-red-400 break-words">
+              {parseContractError(cancelError)}
+            </div>
+          )}
         </div>
       )}
 
@@ -180,6 +206,17 @@ function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
     <>
       <div className="text-muted">{k}</div>
       <div className={mono ? "font-mono break-all" : ""}>{v}</div>
+    </>
+  );
+}
+
+function AddressRow({ k, v }: { k: string; v: string }) {
+  return (
+    <>
+      <div className="text-muted">{k}</div>
+      <div>
+        <AddressTag address={v} truncate={false} />
+      </div>
     </>
   );
 }

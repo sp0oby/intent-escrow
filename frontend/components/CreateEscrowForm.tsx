@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   useAccount,
   useChainId,
   useReadContract,
+  useSwitchChain,
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
@@ -16,12 +17,14 @@ import {
   NATIVE_ETH,
   TARGET_CHAIN,
 } from "@/lib/contract";
+import { parseContractError } from "@/lib/errors";
 
 type AssetKind = "eth" | "erc20";
 
 export function CreateEscrowForm() {
-  const { address } = useAccount();
+  const { address, status } = useAccount();
   const chainId = useChainId();
+  const { switchChain, isPending: switching } = useSwitchChain();
 
   const [asset, setAsset] = useState<AssetKind>("eth");
   const [tokenAddr, setTokenAddr] = useState<string>(
@@ -31,10 +34,10 @@ export function CreateEscrowForm() {
   const [amount, setAmount] = useState<string>("0.01");
   const [expiryHours, setExpiryHours] = useState<string>("24");
 
-  const wrongChain = chainId !== TARGET_CHAIN.id;
+  const connected = status === "connected";
+  const wrongChain = connected && chainId !== TARGET_CHAIN.id;
   const validToken = asset === "eth" || isAddress(tokenAddr);
 
-  // Only read decimals for ERC-20 path and when address is valid.
   const { data: decimals } = useReadContract({
     address: validToken && asset === "erc20" ? (tokenAddr as Address) : undefined,
     abi: ERC20_ABI,
@@ -65,6 +68,12 @@ export function CreateEscrowForm() {
   }, [expiryHours]);
 
   // --- Write: approve ---
+  // Two overlapping pending states, per ethskills frontend-ux:
+  //   - `approving`: wagmi's own isPending (click -> wallet -> hash)
+  //   - `approveCooldown`: the 3s window after confirmation where the
+  //     allowance cache may not have refreshed yet
+  // Both must be `false` before the Create button re-enables, otherwise a
+  // user can double-submit in the confirm->cache gap.
   const {
     writeContract: writeApprove,
     data: approveHash,
@@ -72,6 +81,18 @@ export function CreateEscrowForm() {
     reset: resetApprove,
   } = useWriteContract();
   const approveReceipt = useWaitForTransactionReceipt({ hash: approveHash });
+  const [approveCooldown, setApproveCooldown] = useState(false);
+
+  useEffect(() => {
+    if (!approveReceipt.isSuccess) return;
+    setApproveCooldown(true);
+    const t = setTimeout(() => {
+      refetchAllowance();
+      setApproveCooldown(false);
+      resetApprove();
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [approveReceipt.isSuccess, refetchAllowance, resetApprove]);
 
   const needsApproval =
     asset === "erc20" && parsedAmount > 0n && (allowance ?? 0n) < parsedAmount;
@@ -84,13 +105,6 @@ export function CreateEscrowForm() {
       functionName: "approve",
       args: [INTENT_ESCROW_ADDRESS, parsedAmount],
     });
-  }
-
-  // Refresh allowance once approval confirms so the Create button enables.
-  if (approveReceipt.isSuccess && approveHash) {
-    // fire-and-forget; wagmi batches sensibly.
-    refetchAllowance();
-    resetApprove();
   }
 
   // --- Write: createEscrow ---
@@ -114,13 +128,18 @@ export function CreateEscrowForm() {
     });
   }
 
-  const canCreate =
-    !wrongChain &&
+  const fieldsValid =
     isAddress(beneficiary) &&
     parsedAmount > 0n &&
     Number(expiryHours) > 0 &&
-    !needsApproval &&
     (asset === "eth" || isAddress(tokenAddr));
+
+  const canCreate =
+    connected &&
+    !wrongChain &&
+    fieldsValid &&
+    !needsApproval &&
+    !approveCooldown;
 
   return (
     <div className="card space-y-5">
@@ -173,7 +192,8 @@ export function CreateEscrowForm() {
           onChange={(e) => setBeneficiary(e.target.value)}
         />
         <div className="text-xs text-muted mt-1">
-          They will sign the release intent.
+          They will sign the release intent. EOAs or ERC-1271 contract wallets
+          (Safe, ERC-4337 smart accounts, EIP-7702 delegates) both work.
         </div>
       </div>
 
@@ -198,33 +218,52 @@ export function CreateEscrowForm() {
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2 pt-1">
-        {/* 1. Network */}
-        {wrongChain && (
-          <span className="text-xs text-red-400">
-            Switch wallet to {TARGET_CHAIN.name}.
-          </span>
-        )}
-
-        {/* 2. Approve (ERC-20 only, if needed) */}
-        {asset === "erc20" && needsApproval && (
+      {/* Four-state primary action slot (ethskills frontend-ux rule 2):
+          exactly one primary button, chosen in priority order:
+            connect -> switch network -> approve -> create.
+          Never show Approve and Create at the same time. */}
+      <div className="pt-1">
+        {!connected ? (
+          <div className="text-xs text-muted">
+            Connect your wallet (top right) to continue.
+          </div>
+        ) : wrongChain ? (
           <button
             className="btn"
-            disabled={approving || approveReceipt.isLoading || !isAddress(tokenAddr)}
+            disabled={switching}
+            onClick={() => switchChain({ chainId: TARGET_CHAIN.id })}
+          >
+            {switching ? "Switching…" : `Switch to ${TARGET_CHAIN.name}`}
+          </button>
+        ) : asset === "erc20" && needsApproval ? (
+          <button
+            className="btn"
+            disabled={
+              approving ||
+              approveReceipt.isLoading ||
+              approveCooldown ||
+              !isAddress(tokenAddr) ||
+              parsedAmount === 0n
+            }
             onClick={onApprove}
           >
-            {approving || approveReceipt.isLoading ? "Approving…" : "Approve exact amount"}
+            {approving || approveReceipt.isLoading
+              ? "Approving…"
+              : approveCooldown
+              ? "Confirming…"
+              : "Approve exact amount"}
+          </button>
+        ) : (
+          <button
+            className="btn"
+            disabled={!canCreate || creating || createReceipt.isLoading}
+            onClick={onCreate}
+          >
+            {creating || createReceipt.isLoading
+              ? "Creating…"
+              : "Create escrow"}
           </button>
         )}
-
-        {/* 3. Create */}
-        <button
-          className="btn"
-          disabled={!canCreate || creating || createReceipt.isLoading}
-          onClick={onCreate}
-        >
-          {creating || createReceipt.isLoading ? "Creating…" : "Create escrow"}
-        </button>
       </div>
 
       {createReceipt.isSuccess && (
@@ -237,8 +276,8 @@ export function CreateEscrowForm() {
         </div>
       )}
       {createError && (
-        <div className="text-sm text-red-400 break-all">
-          {createError.message}
+        <div className="text-sm text-red-400 break-words">
+          {parseContractError(createError)}
         </div>
       )}
     </div>

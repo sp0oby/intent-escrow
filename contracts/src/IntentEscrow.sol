@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -16,7 +16,11 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 ///         the depositor refunds the remainder. Supports partial releases.
 /// @dev    Design goals: one compact contract, strict Checks-Effects-Interactions,
 ///         SafeERC20 everywhere, replay-safe signatures via per-escrow nonces
-///         plus an EIP-712 domain separator.
+///         plus an EIP-712 domain separator. Signature verification uses
+///         `SignatureChecker` so the beneficiary can be either a plain EOA or
+///         any contract wallet implementing ERC-1271 (Safe, ERC-4337 account,
+///         EIP-7702 smart EOA) — this is what makes the system genuinely
+///         compatible with account abstraction rather than just EOAs.
 contract IntentEscrow is EIP712, ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
 
@@ -141,13 +145,18 @@ contract IntentEscrow is EIP712, ReentrancyGuard, Ownable {
     /// @notice Create a new escrow, locking `amount` of `token` (or ETH when
     ///         `token == NATIVE_ETH`) in favour of `beneficiary` until
     ///         `expiry` passes or full release occurs.
-    /// @dev    Follows Checks-Effects-Interactions; `nonReentrant` is a
-    ///         belt-and-braces guard against malicious ERC-20 callbacks.
-    ///         The expiry is capped at ~5 years to protect against UX typos
-    ///         that would otherwise freeze funds practically forever.
+    /// @dev    For ERC-20 escrows, the recorded `totalAmount` is the amount
+    ///         actually received by this contract, not the caller-supplied
+    ///         `amount`. This keeps the invariant
+    ///         `balance(token) >= totalLocked[token]` true even for
+    ///         fee-on-transfer or rebasing tokens. The `nonReentrant` guard
+    ///         still holds while the balance delta is measured. Expiry is
+    ///         capped at ~5 years to protect against UX typos that would
+    ///         otherwise freeze funds practically forever.
     /// @param  beneficiary The party who will sign release intents.
     /// @param  token       ERC-20 address, or `NATIVE_ETH` (address(0)) for ETH.
-    /// @param  amount      Amount to lock, in the token's smallest unit.
+    /// @param  amount      Amount the depositor is offering. For ERC-20s the
+    ///                     contract stores the actual amount received.
     /// @param  expiry      Unix timestamp after which the depositor may refund.
     /// @return escrowId    Id of the new escrow.
     function createEscrow(
@@ -164,10 +173,22 @@ contract IntentEscrow is EIP712, ReentrancyGuard, Ownable {
 
         // For ETH, msg.value must match exactly; for ERC-20 it must be zero
         // (any attached ETH on an ERC-20 escrow would be permanently stuck).
+        uint256 stored;
         if (token == NATIVE_ETH) {
             if (msg.value != amount) revert BadEthValue();
+            stored = amount;
         } else {
             if (msg.value != 0) revert BadEthValue();
+            // Interaction-before-effect for ERC-20s is intentional: we need
+            // to know how many tokens actually arrived before writing state,
+            // because fee-on-transfer tokens deliver less than `amount`.
+            // The `nonReentrant` guard prevents any re-entrant state
+            // corruption during the transfer.
+            uint256 balanceBefore = IERC20(token).balanceOf(address(this));
+            IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+            uint256 balanceAfter = IERC20(token).balanceOf(address(this));
+            stored = balanceAfter - balanceBefore;
+            if (stored == 0) revert ZeroAmount();
         }
 
         // Effects.
@@ -176,21 +197,15 @@ contract IntentEscrow is EIP712, ReentrancyGuard, Ownable {
             depositor: msg.sender,
             beneficiary: beneficiary,
             token: token,
-            totalAmount: amount,
+            totalAmount: stored,
             released: 0,
             expiry: expiry,
             nonce: 0,
             closed: false
         });
-        totalLocked[token] += amount;
+        totalLocked[token] += stored;
 
-        // Interactions. safeTransferFrom reverts on failure and tolerates
-        // non-standard ERC-20s that don't return a bool.
-        if (token != NATIVE_ETH) {
-            IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
-        }
-
-        emit EscrowCreated(escrowId, msg.sender, beneficiary, token, amount, expiry);
+        emit EscrowCreated(escrowId, msg.sender, beneficiary, token, stored, expiry);
     }
 
     // -------------------------------------------------------------------------
@@ -206,10 +221,15 @@ contract IntentEscrow is EIP712, ReentrancyGuard, Ownable {
 
     /// @notice Release up to `amount` to the beneficiary, authorised by their
     ///         EIP-712 signature over `SettleIntent`.
+    /// @dev    Uses `SignatureChecker.isValidSignatureNow`, which accepts:
+    ///         (1) a standard 65-byte ECDSA signature from an EOA beneficiary,
+    ///         (2) any contract beneficiary implementing ERC-1271
+    ///             `isValidSignature(bytes32,bytes)` — Safe, ERC-4337 smart
+    ///             wallets, EIP-7702 delegated EOAs, etc.
     /// @param  escrowId  Target escrow.
     /// @param  amount    Amount to release this call (must be <= remaining).
     /// @param  deadline  Signature expiry (Unix seconds).
-    /// @param  signature 65-byte ECDSA signature by the beneficiary.
+    /// @param  signature EOA signature OR ERC-1271 signature bytes.
     function settleWithSignature(
         uint256 escrowId,
         uint256 amount,
@@ -227,12 +247,13 @@ contract IntentEscrow is EIP712, ReentrancyGuard, Ownable {
         uint256 remaining = e.totalAmount - e.released;
         if (amount > remaining) revert AmountExceedsRemaining();
 
-        // Verify the beneficiary signed this exact digest. `tryRecover`
-        // returns address(0) on any failure, so we also explicitly check
-        // that the recovered signer equals the stored beneficiary.
+        // Verify the beneficiary authorised this exact digest.
+        // `SignatureChecker` dispatches to ECDSA recovery for EOAs (rejecting
+        // malleable high-s sigs via OZ's guarded recover) and to
+        // ERC-1271 `isValidSignature` for contract wallets. Any failure path
+        // returns `false`.
         bytes32 digest = _hashSettleIntent(escrowId, amount, deadline, e.nonce);
-        (address recovered, ECDSA.RecoverError err, ) = ECDSA.tryRecover(digest, signature);
-        if (err != ECDSA.RecoverError.NoError || recovered != e.beneficiary) {
+        if (!SignatureChecker.isValidSignatureNow(e.beneficiary, digest, signature)) {
             revert InvalidSignature();
         }
 
