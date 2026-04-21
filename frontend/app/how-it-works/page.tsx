@@ -87,23 +87,7 @@ export default function HowItWorksPage() {
 
       <section className="space-y-4">
         <h2 className="text-xl font-semibold">The lifecycle, at a glance</h2>
-        <div className="card font-mono text-xs leading-6 text-muted overflow-x-auto">
-          <pre className="whitespace-pre">{String.raw`  depositor                 contract                 beneficiary / relayer
-      │                         │                             │
-      │ createEscrow(...)       │                             │
-      │────────────────────────▶│                             │
-      │                         │  EscrowCreated              │
-      │                         │────────────────────────────▶│
-      │                         │                             │
-      │                         │     signTypedData (off-chain, gasless)
-      │                         │◀────────────────────────────│
-      │                         │                             │
-      │                         │ settleWithSignature(sig)    │
-      │                         │◀────────────────────────────│
-      │                         │  EscrowSettled / nonce++    │
-      │◀────────────────────────│────────────────────────────▶│
-`}</pre>
-        </div>
+        <LifecycleDiagram />
       </section>
 
       <section className="flex flex-wrap gap-3">
@@ -135,6 +119,201 @@ function Rail({ title, body }: { title: string; body: string }) {
     <div className="card space-y-1">
       <div className="font-medium text-sm">{title}</div>
       <div className="text-sm text-muted">{body}</div>
+    </div>
+  );
+}
+
+function LifecycleDiagram() {
+  // UML-style sequence diagram rendered as inline SVG so it scales on every
+  // viewport and respects the app's color tokens. Three swim lanes
+  // (Depositor, Contract, Beneficiary) with dashed lifelines, arrows for
+  // on-chain messages, and a highlighted callout for the single off-chain
+  // (gasless) step — which is the whole point of the intent pattern.
+  const ACCENT = "#6ee7b7";
+  const MUTED = "#8b95a7";
+  const EDGE = "#222634";
+  const INK = "#e7ecf3";
+  const PANEL = "#14171f";
+  return (
+    <div className="card overflow-x-auto">
+      <svg
+        role="img"
+        aria-label="Sequence diagram of the intent-based escrow lifecycle."
+        viewBox="0 0 640 380"
+        className="w-full h-auto min-w-[520px]"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        <defs>
+          <marker
+            id="arrow-accent"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={ACCENT} />
+          </marker>
+          <marker
+            id="arrow-muted"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={MUTED} />
+          </marker>
+        </defs>
+
+        {/* Lane headers */}
+        <g fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="13" fontWeight={500}>
+          {[
+            { x: 30, label: "Depositor" },
+            { x: 255, label: "Contract" },
+            { x: 480, label: "Beneficiary" },
+          ].map(({ x, label }) => (
+            <g key={label}>
+              <rect x={x} y={10} width={130} height={32} rx={6} fill={PANEL} stroke={EDGE} />
+              <text x={x + 65} y={31} textAnchor="middle" fill={INK}>
+                {label}
+              </text>
+            </g>
+          ))}
+        </g>
+
+        {/* Lifelines */}
+        <g stroke={EDGE} strokeWidth={1} strokeDasharray="4 4">
+          <line x1={95} y1={46} x2={95} y2={360} />
+          <line x1={320} y1={46} x2={320} y2={360} />
+          <line x1={545} y1={46} x2={545} y2={360} />
+        </g>
+
+        <g fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" fontSize="12">
+          {/* 1. Depositor -> Contract: createEscrow */}
+          <text x={205} y={76} textAnchor="middle" fill={ACCENT}>
+            createEscrow(...)
+          </text>
+          <line
+            x1={95}
+            y1={88}
+            x2={315}
+            y2={88}
+            stroke={ACCENT}
+            strokeWidth={1.5}
+            markerEnd="url(#arrow-accent)"
+          />
+
+          {/* 2. Contract -> Beneficiary: EscrowCreated (event, dashed/muted) */}
+          <text x={432} y={124} textAnchor="middle" fill={MUTED}>
+            EscrowCreated event
+          </text>
+          <line
+            x1={320}
+            y1={136}
+            x2={540}
+            y2={136}
+            stroke={MUTED}
+            strokeWidth={1}
+            strokeDasharray="3 3"
+            markerEnd="url(#arrow-muted)"
+          />
+
+          {/* 3. Off-chain signing — highlighted as a callout, NOT an on-chain arrow */}
+          <g>
+            <rect
+              x={400}
+              y={170}
+              width={220}
+              height={52}
+              rx={6}
+              fill={PANEL}
+              stroke={ACCENT}
+              strokeOpacity={0.55}
+            />
+            <text x={510} y={190} textAnchor="middle" fill={ACCENT}>
+              signTypedData (off-chain)
+            </text>
+            <text
+              x={510}
+              y={208}
+              textAnchor="middle"
+              fill={MUTED}
+              fontSize="11"
+              fontFamily="ui-sans-serif, system-ui, sans-serif"
+            >
+              no gas · just a signed message
+            </text>
+            <line
+              x1={545}
+              y1={170}
+              x2={545}
+              y2={160}
+              stroke={ACCENT}
+              strokeOpacity={0.55}
+              strokeDasharray="2 2"
+            />
+          </g>
+
+          {/* 4. Anyone -> Contract: settleWithSignature(sig) */}
+          <text x={432} y={256} textAnchor="middle" fill={ACCENT}>
+            settleWithSignature(sig)
+          </text>
+          <line
+            x1={540}
+            y1={268}
+            x2={325}
+            y2={268}
+            stroke={ACCENT}
+            strokeWidth={1.5}
+            markerEnd="url(#arrow-accent)"
+          />
+
+          {/* 5. Contract -> Beneficiary: payout + EscrowSettled + nonce bump
+                 all happen in the same tx, so one arrow reads cleaner than
+                 two parallel ones and avoids implying payout goes to the
+                 depositor (that's the refund / cancel flow, not settle). */}
+          <text x={432} y={306} textAnchor="middle" fill={ACCENT}>
+            payout · EscrowSettled · nonce++
+          </text>
+          <line
+            x1={325}
+            y1={318}
+            x2={540}
+            y2={318}
+            stroke={ACCENT}
+            strokeWidth={1.5}
+            markerEnd="url(#arrow-accent)"
+          />
+        </g>
+
+        {/* Legend */}
+        <g
+          fontFamily="ui-sans-serif, system-ui, sans-serif"
+          fontSize="11"
+          fill={MUTED}
+          transform="translate(30, 355)"
+        >
+          <line x1={0} y1={-3} x2={22} y2={-3} stroke={ACCENT} strokeWidth={1.5} />
+          <text x={28} y={0}>
+            on-chain call
+          </text>
+          <line
+            x1={130}
+            y1={-3}
+            x2={152}
+            y2={-3}
+            stroke={MUTED}
+            strokeWidth={1}
+            strokeDasharray="3 3"
+          />
+          <text x={158} y={0}>
+            event / return
+          </text>
+        </g>
+      </svg>
     </div>
   );
 }

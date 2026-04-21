@@ -56,7 +56,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <span>Sepolia testnet · not audited · do not use with real value.</span>
               <a
                 className="hover:text-white"
-                href="https://github.com"
+                href="https://github.com/sp0oby/intent-escrow"
                 target="_blank"
                 rel="noreferrer"
               >
