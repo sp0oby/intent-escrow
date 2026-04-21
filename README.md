@@ -186,7 +186,8 @@ Full file: [`contracts/.gas-snapshot`](contracts/.gas-snapshot).
 
 | | Link |
 |--|--|
-| Contract (Sepolia) | `TODO: paste Etherscan URL after first deploy` |
+| `IntentEscrow` (Sepolia, verified) | [`0x3763507a41ff8B27C31c9F5b65BF902a945D6f34`](https://sepolia.etherscan.io/address/0x3763507a41ff8B27C31c9F5b65BF902a945D6f34#code) |
+| Demo ERC-20 `IEDT` (Sepolia, verified) | [`0xDD03B2174A4771754B4BdFeFA1eC74A69E634806`](https://sepolia.etherscan.io/address/0xDD03B2174A4771754B4BdFeFA1eC74A69E634806#code) |
 | Frontend (Vercel)  | `TODO: paste Vercel URL after first deploy` |
 
 ---
