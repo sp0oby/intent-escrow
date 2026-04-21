@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useAccount, useChainId, useSignTypedData } from "wagmi";
+import { useAccount, useSignTypedData, useSwitchChain } from "wagmi";
 import { formatEther, formatUnits, parseEther, parseUnits } from "viem";
 import {
   INTENT_ESCROW_ADDRESS,
@@ -22,8 +22,9 @@ export function SignIntentCard({
   tokenDecimals?: number;
   tokenSymbol?: string;
 }) {
-  const { address } = useAccount();
-  const chainId = useChainId();
+  // See CreateEscrowForm for the useAccount-over-useChainId rationale.
+  const { address, chainId: walletChainId } = useAccount();
+  const { switchChain, isPending: switching } = useSwitchChain();
   const isBeneficiary =
     !!address && address.toLowerCase() === escrow.beneficiary.toLowerCase();
 
@@ -92,11 +93,24 @@ export function SignIntentCard({
     );
   }
 
-  if (chainId !== TARGET_CHAIN.id) {
+  if (walletChainId !== TARGET_CHAIN.id) {
     return (
-      <div className="card text-sm text-muted">
-        Signing requires chain {TARGET_CHAIN.name}. (It doesn&apos;t cost gas, but your
-        wallet needs to match the domain.)
+      <div className="card space-y-3">
+        <div className="text-xs uppercase tracking-wider text-muted">
+          Sign release intent
+        </div>
+        <p className="text-sm text-muted">
+          Your wallet is on the wrong network. EIP-712 signatures are domain-
+          bound, so your wallet has to be on {TARGET_CHAIN.name} for the
+          signature to be valid. Switching costs nothing.
+        </p>
+        <button
+          className="btn"
+          disabled={switching}
+          onClick={() => switchChain({ chainId: TARGET_CHAIN.id })}
+        >
+          {switching ? "Switching…" : `Switch to ${TARGET_CHAIN.name}`}
+        </button>
       </div>
     );
   }

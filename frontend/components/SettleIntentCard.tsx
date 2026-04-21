@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import {
-  useChainId,
+  useAccount,
+  useSwitchChain,
   useWaitForTransactionReceipt,
   useWriteContract,
 } from "wagmi";
@@ -38,7 +39,9 @@ function parsePayload(raw: string): Parsed | string {
 }
 
 export function SettleIntentCard({ escrowId }: { escrowId: bigint }) {
-  const chainId = useChainId();
+  // See CreateEscrowForm for the useAccount-over-useChainId rationale.
+  const { chainId: walletChainId, status } = useAccount();
+  const { switchChain, isPending: switching } = useSwitchChain();
   const [raw, setRaw] = useState("");
   const parsed = useMemo(() => (raw.trim() ? parsePayload(raw) : null), [raw]);
   const ok = parsed && typeof parsed !== "string";
@@ -62,7 +65,8 @@ export function SettleIntentCard({ escrowId }: { escrowId: bigint }) {
     });
   }
 
-  const wrongChain = chainId !== TARGET_CHAIN.id;
+  const connected = status === "connected";
+  const wrongChain = connected && walletChainId !== TARGET_CHAIN.id;
 
   return (
     <div className="card space-y-3">
@@ -89,13 +93,23 @@ export function SettleIntentCard({ escrowId }: { escrowId: bigint }) {
           page ({escrowId.toString()}).
         </div>
       )}
-      <button
-        className="btn"
-        disabled={!ok || !matchesId || wrongChain || isPending || receipt.isLoading}
-        onClick={onSettle}
-      >
-        {isPending || receipt.isLoading ? "Submitting…" : "Submit settlement"}
-      </button>
+      {wrongChain ? (
+        <button
+          className="btn"
+          disabled={switching}
+          onClick={() => switchChain({ chainId: TARGET_CHAIN.id })}
+        >
+          {switching ? "Switching…" : `Switch to ${TARGET_CHAIN.name}`}
+        </button>
+      ) : (
+        <button
+          className="btn"
+          disabled={!ok || !matchesId || isPending || receipt.isLoading}
+          onClick={onSettle}
+        >
+          {isPending || receipt.isLoading ? "Submitting…" : "Submit settlement"}
+        </button>
+      )}
       {receipt.isSuccess && (
         <div className="text-sm text-accent">Settled. Tx mined.</div>
       )}

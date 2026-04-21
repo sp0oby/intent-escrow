@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   useAccount,
-  useChainId,
   useReadContract,
   useSwitchChain,
   useWaitForTransactionReceipt,
@@ -22,8 +21,12 @@ import { parseContractError } from "@/lib/errors";
 type AssetKind = "eth" | "erc20";
 
 export function CreateEscrowForm() {
-  const { address, status } = useAccount();
-  const chainId = useChainId();
+  // Read the chainId from the connector itself (useAccount), NOT useChainId.
+  // useChainId returns the wagmi config's active chain, which for our
+  // single-chain config always resolves to Sepolia even if the wallet is
+  // actually sitting on mainnet. That silently disables our wrong-chain
+  // guard and lets the user submit a tx the wallet will then reject.
+  const { address, status, chainId: walletChainId } = useAccount();
   const { switchChain, isPending: switching } = useSwitchChain();
 
   const [asset, setAsset] = useState<AssetKind>("eth");
@@ -35,7 +38,7 @@ export function CreateEscrowForm() {
   const [expiryHours, setExpiryHours] = useState<string>("24");
 
   const connected = status === "connected";
-  const wrongChain = connected && chainId !== TARGET_CHAIN.id;
+  const wrongChain = connected && walletChainId !== TARGET_CHAIN.id;
   const validToken = asset === "eth" || isAddress(tokenAddr);
 
   const { data: decimals } = useReadContract({

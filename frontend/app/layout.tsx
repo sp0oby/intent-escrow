@@ -3,6 +3,7 @@ import Link from "next/link";
 import "./globals.css";
 import { Providers } from "./providers";
 import { ConnectButton } from "@/components/ConnectButton";
+import { WrongChainBanner } from "@/components/WrongChainBanner";
 
 const DESCRIPTION =
   "Minimal intent-based escrow with EIP-712 signature verification. ETH and ERC-20, ERC-1271 smart-wallet beneficiaries, gasless accept-and-release intents. Sepolia testnet.";
@@ -50,6 +51,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </nav>
             </div>
           </header>
+          <WrongChainBanner />
           <main className="max-w-5xl mx-auto px-6 py-10">{children}</main>
           <footer className="border-t border-edge mt-16">
             <div className="max-w-5xl mx-auto px-6 py-6 text-xs text-muted flex items-center justify-between">
