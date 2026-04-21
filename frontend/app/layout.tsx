@@ -37,6 +37,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 intent<span className="text-accent">.escrow</span>
               </Link>
               <nav className="flex items-center gap-4 text-sm">
+                <Link href="/how-it-works" className="text-muted hover:text-white">
+                  How it works
+                </Link>
                 <Link href="/create" className="text-muted hover:text-white">
                   Create
                 </Link>

@@ -4,12 +4,16 @@ import { useEffect, useState } from "react";
 import { useAccount, usePublicClient, useReadContract } from "wagmi";
 import { type Address } from "viem";
 import {
+  ERC20_ABI,
   INTENT_ESCROW_ABI,
   INTENT_ESCROW_ADDRESS,
+  NATIVE_ETH,
 } from "@/lib/contract";
 import type { EscrowWithId } from "@/lib/types";
 import { EscrowCard } from "@/components/EscrowCard";
 import { AddressTag } from "@/components/AddressTag";
+
+type TokenMeta = { symbol: string; decimals: number };
 
 export default function EscrowsPage() {
   const client = usePublicClient();
@@ -23,6 +27,7 @@ export default function EscrowsPage() {
   });
 
   const [escrows, setEscrows] = useState<EscrowWithId[]>([]);
+  const [tokenMeta, setTokenMeta] = useState<Record<string, TokenMeta>>({});
   const [loading, setLoading] = useState(false);
   const [filterMine, setFilterMine] = useState(false);
 
@@ -49,7 +54,44 @@ export default function EscrowsPage() {
             .catch(() => null)
         )
       );
-      setEscrows(results.filter(Boolean) as EscrowWithId[]);
+      const found = results.filter(Boolean) as EscrowWithId[];
+      setEscrows(found);
+
+      // Batch-fetch symbol + decimals for every unique ERC-20 appearing in
+      // the list, so cards render the real ticker instead of the "TKN"
+      // fallback. ETH entries skip this path entirely.
+      const uniqueTokens = Array.from(
+        new Set(
+          found
+            .map((e) => e.token.toLowerCase())
+            .filter((t) => t !== NATIVE_ETH.toLowerCase())
+        )
+      ) as Address[];
+
+      const metas = await Promise.all(
+        uniqueTokens.map(async (addr) => {
+          try {
+            const [symbol, decimals] = await Promise.all([
+              client.readContract({
+                address: addr,
+                abi: ERC20_ABI,
+                functionName: "symbol",
+              }),
+              client.readContract({
+                address: addr,
+                abi: ERC20_ABI,
+                functionName: "decimals",
+              }),
+            ]);
+            return [addr, { symbol: String(symbol), decimals: Number(decimals) }] as const;
+          } catch {
+            return [addr, null] as const;
+          }
+        })
+      );
+      const dict: Record<string, TokenMeta> = {};
+      for (const [addr, meta] of metas) if (meta) dict[addr] = meta;
+      setTokenMeta(dict);
       setLoading(false);
     }
     load();
@@ -100,9 +142,17 @@ export default function EscrowsPage() {
       )}
 
       <div className="grid md:grid-cols-2 gap-4">
-        {displayed.map((e) => (
-          <EscrowCard key={e.id.toString()} e={e} />
-        ))}
+        {displayed.map((e) => {
+          const meta = tokenMeta[e.token.toLowerCase()];
+          return (
+            <EscrowCard
+              key={e.id.toString()}
+              e={e}
+              tokenSymbol={meta?.symbol}
+              tokenDecimals={meta?.decimals}
+            />
+          );
+        })}
       </div>
     </div>
   );
