@@ -27,12 +27,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-xs uppercase tracking-wider text-muted">
-          Live on Sepolia
-        </h2>
-        <LiveStats />
-      </section>
+      <LiveStats />
 
       <section className="space-y-3">
         <h2 className="text-xl font-semibold">The flow</h2>
