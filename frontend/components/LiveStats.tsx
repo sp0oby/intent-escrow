@@ -52,27 +52,18 @@ export function LiveStats() {
         label="Protocol fee"
         value={formatFee(feeBps, isLoading, isError)}
       />
-      <Stat label="Network" value="Sepolia" sub="Live · verified" />
+      <Stat label="Network" value="Sepolia" />
     </section>
   );
 }
 
-function Stat({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-}) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="card">
       <div className="text-xs uppercase tracking-wider text-muted mb-1">
         {label}
       </div>
       <div className="text-xl font-mono text-accent leading-tight">{value}</div>
-      {sub && <div className="text-xs text-muted mt-1">{sub}</div>}
     </div>
   );
 }

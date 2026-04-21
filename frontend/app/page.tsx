@@ -21,9 +21,6 @@ export default function Home() {
           <Link href="/create" className="btn">
             Create escrow
           </Link>
-          <Link href="/how-it-works" className="btn-ghost">
-            How it works
-          </Link>
           <Link href="/escrows" className="btn-ghost">
             View escrows
           </Link>
@@ -96,32 +93,6 @@ export default function Home() {
             title="Fee-on-transfer aware"
             body="createEscrow records the actual ERC-20 amount received, not the caller-supplied amount, so deflationary tokens can't desync accounting."
           />
-        </div>
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-xl font-semibold">Under the hood</h2>
-        <div className="flex flex-wrap gap-2">
-          {[
-            "Solidity ^0.8.28",
-            "OpenZeppelin v5",
-            "Foundry",
-            "EIP-712",
-            "ERC-1271",
-            "SafeERC20",
-            "Next.js 15",
-            "wagmi v2",
-            "viem",
-            "TanStack Query",
-            "Tailwind",
-          ].map((t) => (
-            <span
-              key={t}
-              className="inline-flex items-center text-xs font-mono text-muted border border-edge rounded-full px-3 py-1"
-            >
-              {t}
-            </span>
-          ))}
         </div>
       </section>
 
